@@ -70,6 +70,27 @@ class TransformerBlock(nn.Module):
         z = self.layernorm2(self.dropout2(z) + u)
         return z
 
+
+# https://github.com/kimiyoung/transformer-xl/blob/master/pytorch/mem_transformer.py#L15-L31
+class PositionalEmbedding(nn.Module):
+    def __init__(self, demb):
+        super(PositionalEmbedding, self).__init__()
+
+        self.demb = demb
+
+        inv_freq = 1 / (10000 ** (torch.arange(0.0, demb, 2.0) / demb))
+        self.register_buffer('inv_freq', inv_freq)
+
+    def forward(self, pos_seq, bsz=None):
+        sinusoid_inp = torch.ger(pos_seq, self.inv_freq)
+        pos_emb = torch.cat([sinusoid_inp.sin(), sinusoid_inp.cos()], dim=-1)
+
+        if bsz is not None:
+            return pos_emb[:,None,:].expand(-1, bsz, -1)
+        else:
+            return pos_emb[:,None,:]
+
+
 class Transformer(nn.Module):
     def __init__(self, seq_len, tokens, d, k, m, heads, layers, tied_weights=False, dropout=0., dropoutio=0., max_mem_length=1):
         super(Transformer, self).__init__()
@@ -81,7 +102,7 @@ class Transformer(nn.Module):
         self.layers = layers
         self.max_mem_length = max_mem_length
 
-        self.positional_embedding = nn.Embedding(seq_len, d)
+        self.positional_embedding = PositionalEmbedding(d)
         self.dropi = nn.Dropout(dropoutio)
         self.word_embedding = nn.Embedding(tokens, d)
         self.transformer = nn.ModuleList()
@@ -92,7 +113,7 @@ class Transformer(nn.Module):
         self.dropo = nn.Dropout(dropoutio)
         self.bias = nn.Parameter(torch.ones(tokens))
 
-        nn.init.normal_(self.positional_embedding.weight, 0, .02)
+        # nn.init.normal_(self.positional_embedding.weight, 0, .02)
         nn.init.normal_(self.word_embedding.weight, 0, .02)
         if not self.tied_weights: nn.init.normal_(self.decoder.weight, 0, .02)
         nn.init.constant_(self.bias, 0.0)
@@ -102,7 +123,6 @@ class Transformer(nn.Module):
     def forward(self, x):
         padded = False
         if x.shape[1] != 32:
-            print('x', x.shape)
             padded = True
             old_x_shape = x.shape[1]
             x = torch.cat([x, torch.zeros((x.shape[0], 32 - x.shape[1]), dtype=torch.long).cuda()], dim=1)
@@ -112,10 +132,10 @@ class Transformer(nn.Module):
             self.mask = torch.triu(torch.ones(len(x) * (mem_len + 1), len(x)))
             self.mask.masked_fill_(self.mask == 0, float('-inf')).masked_fill_(self.mask == 1, float(0.0))
             self.mask = self.mask.transpose(0,1).to(x.device)
-            self.pos = torch.arange(0, x.shape[0], dtype=torch.long).to(x.device)
+            self.pos = torch.arange(x.shape[0] - 1, -1, -1, dtype=torch.long).to(x.device)
 
         x = self.dropi(self.word_embedding(x) * math.sqrt(self.dims))
-        p = self.dropi(self.positional_embedding(self.pos)[:,None,:])
+        p = self.dropi(self.positional_embedding(self.pos, x.shape[1]))
         z = F.relu(x + p)
 
         hids = [x]  #layers, seq, batch, emb
@@ -143,7 +163,6 @@ class Transformer(nn.Module):
         outputs = F.log_softmax(outputs + self.bias, dim=-1)
         if padded:
             outputs = outputs[:, :old_x_shape, :]
-            print('o', outputs.shape)
         return outputs
 
     def reset_memory(self):
