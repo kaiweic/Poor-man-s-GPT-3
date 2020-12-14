@@ -10,7 +10,8 @@ class TransformerBlock(nn.Module):
         self.heads = heads
 
         self.wq = nn.Linear(d, heads*k, bias=False)
-        self.wk = nn.Linear(d, heads*k, bias=False)
+        self.wke = nn.Linear(d, heads*k, bias=False)
+        self.wkr = nn.Linear(d, heads*k, bias=False)
         self.wv = nn.Linear(d, heads*k, bias=False)
         self.wc = nn.Linear(heads*k, d, bias=False)
         self.dropoutatt = nn.Dropout(dropout)
@@ -24,8 +25,12 @@ class TransformerBlock(nn.Module):
         self.layernorm2 = nn.LayerNorm(d)
         self.dropout2 = nn.Dropout(dropout)
 
+        self.u = nn.Parameter(torch.Tensor(self.heads, self.k))
+        self.v = nn.Parameter(torch.Tensor(self.heads, self.k))
+
         nn.init.normal_(self.wq.weight, 0, .02)
-        nn.init.normal_(self.wk.weight, 0, .02)
+        nn.init.normal_(self.wke.weight, 0, .02)
+        nn.init.normal_(self.wkr.weight, 0, .02)
         nn.init.normal_(self.wv.weight, 0, .02)
         nn.init.normal_(self.wc.weight, 0, .02)
 
@@ -34,7 +39,7 @@ class TransformerBlock(nn.Module):
         nn.init.normal_(self.w2.weight, 0, .02)
         nn.init.constant_(self.w2.bias, 0.0)
 
-    def forward(self, x, mask, memory):
+    def forward(self, x, p, mask, memory):
         seq_len, batch_size, embed_dim = x.shape
         mem_len = memory.shape[0] if memory is not None else 0
 
@@ -43,18 +48,35 @@ class TransformerBlock(nn.Module):
 
         q = self.wq(x)  # seq_len, batch_size, heads * k
         x_mem = torch.cat([memory, x.unsqueeze(0)], dim=0) if memory is not None else x.unsqueeze(0)  # mem_len + 1, seq, batch, emb
-        k = self.wk(x_mem)  # mem_len + 1, seq, batch, heads * k
+        k_e = self.wke(x_mem)  # mem_len + 1, seq, batch, heads * k
+        k_r = self.wkr(p)  # seq, batch, heads * k
+
         v = self.wv(x_mem)  # mem_len + 1, seq, batch, heads * k
         q = torch.reshape(q, (seq_len, batch_size, self.heads, self.k))
-        k = torch.reshape(k, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
+        q_bias_u = q + self.u
+        q_bias_v = q + self.v
+        k_e = torch.reshape(k_e, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
+        k_r = torch.reshape(k_r, (seq_len, batch_size, self.heads, self.k))
         v = torch.reshape(v, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
-        q = torch.transpose(q, 0, 2)  # self.heads, batch_size, seq_len, self.k
-        k = torch.transpose(k, 0, 2)  # self.heads, batch_size, (mem_len + 1) * seq_len, self.k
+        q_bias_u = torch.transpose(q_bias_u, 0, 2)  # self.heads, batch_size, seq_len, self.k
+        q_bias_v = torch.transpose(q_bias_v, 0, 2)  # self.heads, batch_size, seq_len, self.k
+        k_e = torch.transpose(k_e, 0, 2)  # self.heads, batch_size, (mem_len + 1) * seq_len, self.k
+        k_r = torch.transpose(k_r, 0, 2)  # self.heads, batch_size, seq_len, self.k
         v = torch.transpose(v, 0, 2)  # self.heads, batch_size, (mem_len + 1) * seq_len, self.k
-        q = torch.reshape(q, (self.heads * batch_size, seq_len, self.k))
-        k = torch.reshape(k, (self.heads * batch_size, seq_len * (mem_len + 1), self.k))
+        q_bias_u = torch.reshape(q_bias_u, (self.heads * batch_size, seq_len, self.k))
+        q_bias_v = torch.reshape(q_bias_v, (self.heads * batch_size, seq_len, self.k))
+        k_e = torch.reshape(k_e, (self.heads * batch_size, seq_len * (mem_len + 1), self.k))
+        k_r = torch.reshape(k_r, (self.heads * batch_size, seq_len, self.k))
         v = torch.reshape(v, (self.heads * batch_size, seq_len * (mem_len + 1), self.k))
-        alpha = torch.bmm(q, torch.transpose(k, 1, 2))  # self.heads * batch_size, seq_len, seq_len * (mem_len + 1)
+
+        # self.heads * batch_size, seq_len, seq_len * (mem_len + 1)
+        AC = torch.bmm(q_bias_u, torch.transpose(k_e, 1, 2))
+        BD = torch.bmm(q_bias_v, torch.transpose(k_r, 1, 2))
+        if AC.shape[2] > BD.shape[2]:
+            BD = torch.cat([torch.zeros(AC.shape[0], AC.shape[1], AC.shape[2] - BD.shape[2]).cuda(), BD], dim=2)
+
+        # print(AC.shape, BD.shape)
+        alpha = AC + BD
         alpha = alpha / math.sqrt(self.k) + mask
         s = nn.Softmax(dim=-1)
         alpha = s(alpha)  # self.heads * batch_size, seq_len, seq_len * (mem_len + 1) applied softmax
@@ -66,6 +88,7 @@ class TransformerBlock(nn.Module):
         u = self.wc(alpha_v)  # seq_len, batch_size, d
         u = self.dropoutfc(u)
         u = self.layernorm1(u + x)
+        # return u
         z = self.w2(self.dropout1(torch.relu(self.w1(u))))
         z = self.layernorm2(self.dropout2(z) + u)
         return z
@@ -136,20 +159,20 @@ class Transformer(nn.Module):
 
         x = self.dropi(self.word_embedding(x) * math.sqrt(self.dims))
         p = self.dropi(self.positional_embedding(self.pos, x.shape[1]))
-        z = F.relu(x + p)
+        # z = F.relu(x + p)
 
         hids = [x]  #layers, seq, batch, emb
         # add memory for transformer xl
         # if x.shape[1] == 32:
         for i in range(self.layers):
-            z = self.transformer[i](z, self.mask, self.memories[i])  #seq, batch, emb
-            hids.append(z)
+            x = self.transformer[i](x, p, self.mask, self.memories[i])  #seq, batch, emb
+            hids.append(x)
         # else:
         #     for i in range(self.layers):
         #         z = self.transformer[i](z, self.mask, None)  #seq, batch, emb
         #         hids.append(z)
 
-        z = self.dropo(z)
+        x = self.dropo(x)
         # print(x.shape)
 
         # if this is not the last batch (size = 10)
@@ -159,7 +182,7 @@ class Transformer(nn.Module):
                                                                                     else hids[i].detach().unsqueeze(0)
             self.memories[i] = self.memories[i][-self.max_mem_length:]
 
-        outputs = torch.matmul(z, self.word_embedding.weight.t()) if self.tied_weights else self.decoder(z)
+        outputs = torch.matmul(x, self.word_embedding.weight.t()) if self.tied_weights else self.decoder(x)
         outputs = F.log_softmax(outputs + self.bias, dim=-1)
         if padded:
             outputs = outputs[:, :old_x_shape, :]
