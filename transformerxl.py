@@ -25,8 +25,7 @@ class TransformerBlock(nn.Module):
         self.layernorm2 = nn.LayerNorm(d)
         self.dropout2 = nn.Dropout(dropout)
 
-        self.u = nn.Parameter(torch.Tensor(self.heads, self.k))
-        self.v = nn.Parameter(torch.Tensor(self.heads, self.k))
+
 
         nn.init.normal_(self.wq.weight, 0, .02)
         nn.init.normal_(self.wke.weight, 0, .02)
@@ -39,7 +38,7 @@ class TransformerBlock(nn.Module):
         nn.init.normal_(self.w2.weight, 0, .02)
         nn.init.constant_(self.w2.bias, 0.0)
 
-    def forward(self, x, p, mask, memory):
+    def forward(self, x, p, mask, memory, u_bias, v_bias):
         seq_len, batch_size, embed_dim = x.shape
         mem_len = memory.shape[0] if memory is not None else 0
 
@@ -53,10 +52,10 @@ class TransformerBlock(nn.Module):
 
         v = self.wv(x_mem)  # mem_len + 1, seq, batch, heads * k
         q = torch.reshape(q, (seq_len, batch_size, self.heads, self.k))
-        q_bias_u = q + self.u
-        q_bias_v = q + self.v
+        q_bias_u = q + u_bias
+        q_bias_v = q + v_bias
         k_e = torch.reshape(k_e, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
-        k_r = torch.reshape(k_r, (seq_len, batch_size, self.heads, self.k))
+        k_r = torch.reshape(k_r, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
         v = torch.reshape(v, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
         q_bias_u = torch.transpose(q_bias_u, 0, 2)  # self.heads, batch_size, seq_len, self.k
         q_bias_v = torch.transpose(q_bias_v, 0, 2)  # self.heads, batch_size, seq_len, self.k
@@ -66,14 +65,14 @@ class TransformerBlock(nn.Module):
         q_bias_u = torch.reshape(q_bias_u, (self.heads * batch_size, seq_len, self.k))
         q_bias_v = torch.reshape(q_bias_v, (self.heads * batch_size, seq_len, self.k))
         k_e = torch.reshape(k_e, (self.heads * batch_size, seq_len * (mem_len + 1), self.k))
-        k_r = torch.reshape(k_r, (self.heads * batch_size, seq_len, self.k))
+        k_r = torch.reshape(k_r, (self.heads * batch_size, seq_len * (mem_len + 1), self.k))
         v = torch.reshape(v, (self.heads * batch_size, seq_len * (mem_len + 1), self.k))
 
         # self.heads * batch_size, seq_len, seq_len * (mem_len + 1)
         AC = torch.bmm(q_bias_u, torch.transpose(k_e, 1, 2))
         BD = torch.bmm(q_bias_v, torch.transpose(k_r, 1, 2))
-        if AC.shape[2] > BD.shape[2]:
-            BD = torch.cat([torch.zeros(AC.shape[0], AC.shape[1], AC.shape[2] - BD.shape[2]).cuda(), BD], dim=2)
+        # if AC.shape[2] > BD.shape[2]:
+        #     BD = torch.cat([torch.zeros(AC.shape[0], AC.shape[1], AC.shape[2] - BD.shape[2]).cuda(), BD], dim=2)
 
         # print(AC.shape, BD.shape)
         alpha = AC + BD
@@ -143,6 +142,9 @@ class Transformer(nn.Module):
 
         self.memories = [None] * self.layers  #layers, mem_len, seq, batch, emb
 
+        self.u = nn.Parameter(torch.Tensor(heads, k))
+        self.v = nn.Parameter(torch.Tensor(heads, k))
+
     def forward(self, x):
         padded = False
         if x.shape[1] != 32:
@@ -155,7 +157,7 @@ class Transformer(nn.Module):
             self.mask = torch.triu(torch.ones(len(x) * (mem_len + 1), len(x)))
             self.mask.masked_fill_(self.mask == 0, float('-inf')).masked_fill_(self.mask == 1, float(0.0))
             self.mask = self.mask.transpose(0,1).to(x.device)
-            self.pos = torch.arange(x.shape[0] - 1, -1, -1, dtype=torch.long).to(x.device)
+            self.pos = torch.arange((mem_len + 1) *  x.shape[0] - 1, -1, -1, dtype=torch.long).to(x.device)
 
         x = self.dropi(self.word_embedding(x) * math.sqrt(self.dims))
         p = self.dropi(self.positional_embedding(self.pos, x.shape[1]))
@@ -165,7 +167,7 @@ class Transformer(nn.Module):
         # add memory for transformer xl
         # if x.shape[1] == 32:
         for i in range(self.layers):
-            x = self.transformer[i](x, p, self.mask, self.memories[i])  #seq, batch, emb
+            x = self.transformer[i](x, p, self.mask, self.memories[i], self.u, self.v)  #seq, batch, emb
             hids.append(x)
         # else:
         #     for i in range(self.layers):
