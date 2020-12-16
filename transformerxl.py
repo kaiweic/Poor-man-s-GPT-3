@@ -69,9 +69,9 @@ class TransformerBlock(nn.Module):
         q_bias_v = torch.reshape(q_bias_v, (self.heads * batch_size, seq_len, self.k))
         k_e = torch.reshape(k_e, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k))
         k_r = torch.reshape(k_r, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k))
-        v = torch.reshape(v, (self.heads * batch_size, seq_len * (mem_len + 1), self.k))
+        v = torch.reshape(v, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k))
 
-        # self.heads * batch_size, seq_len, seq_len * (mem_len + 1)
+        # self.heads * batch_size, seq_len, (mem_len + 1) * seq_len
         AC = torch.bmm(q_bias_u, torch.transpose(k_e, 1, 2))
         BD = torch.bmm(q_bias_v, torch.transpose(k_r, 1, 2))
         # if AC.shape[2] > BD.shape[2]:
