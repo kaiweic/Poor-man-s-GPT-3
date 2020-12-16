@@ -48,24 +48,27 @@ class TransformerBlock(nn.Module):
         q = self.wq(x)  # seq_len, batch_size, heads * k
         x_mem = torch.cat([memory, x.unsqueeze(0)], dim=0) if memory is not None else x.unsqueeze(0)  # mem_len + 1, seq, batch, emb
         k_e = self.wke(x_mem)  # mem_len + 1, seq, batch, heads * k
-        k_r = self.wkr(p)  # seq, batch, heads * k
+        k_r = self.wkr(p)  # (mem_len + 1) * seq, batch, heads * k
 
         v = self.wv(x_mem)  # mem_len + 1, seq, batch, heads * k
         q = torch.reshape(q, (seq_len, batch_size, self.heads, self.k))
         q_bias_u = q + u_bias
         q_bias_v = q + v_bias
+        k_e = torch.reshape(k_e, ((mem_len + 1) * seq_len, batch_size, self.heads * self.k))
+        k_r = torch.reshape(k_r, ((mem_len + 1) * seq_len, batch_size, self.heads * self.k))
+        v = torch.reshape(v, ((mem_len + 1) * seq_len, batch_size, self.heads * self.k))
         k_e = torch.reshape(k_e, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
         k_r = torch.reshape(k_r, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
         v = torch.reshape(v, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
         q_bias_u = torch.transpose(q_bias_u, 0, 2)  # self.heads, batch_size, seq_len, self.k
         q_bias_v = torch.transpose(q_bias_v, 0, 2)  # self.heads, batch_size, seq_len, self.k
         k_e = torch.transpose(k_e, 0, 2)  # self.heads, batch_size, (mem_len + 1) * seq_len, self.k
-        k_r = torch.transpose(k_r, 0, 2)  # self.heads, batch_size, seq_len, self.k
+        k_r = torch.transpose(k_r, 0, 2)  # self.heads, batch_size, (mem_len + 1) * seq_len, self.k
         v = torch.transpose(v, 0, 2)  # self.heads, batch_size, (mem_len + 1) * seq_len, self.k
         q_bias_u = torch.reshape(q_bias_u, (self.heads * batch_size, seq_len, self.k))
         q_bias_v = torch.reshape(q_bias_v, (self.heads * batch_size, seq_len, self.k))
-        k_e = torch.reshape(k_e, (self.heads * batch_size, seq_len * (mem_len + 1), self.k))
-        k_r = torch.reshape(k_r, (self.heads * batch_size, seq_len * (mem_len + 1), self.k))
+        k_e = torch.reshape(k_e, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k))
+        k_r = torch.reshape(k_r, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k))
         v = torch.reshape(v, (self.heads * batch_size, seq_len * (mem_len + 1), self.k))
 
         # self.heads * batch_size, seq_len, seq_len * (mem_len + 1)
