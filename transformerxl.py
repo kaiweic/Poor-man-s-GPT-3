@@ -38,56 +38,55 @@ class TransformerBlock(nn.Module):
         nn.init.normal_(self.w2.weight, 0, .02)
         nn.init.constant_(self.w2.bias, 0.0)
 
+    # p = positional embedding, R_{i-j} in paper
     def forward(self, x, p, mask, memory, u_bias, v_bias):
         seq_len, batch_size, embed_dim = x.shape
-        mem_len = memory.shape[0] if memory is not None else 0
+        mem_len = (memory.shape[0] // seq_len) if memory is not None else 0
 
         # d = embed_dim
         # k = head_dim
-        # mem_len = m * seq_len
+        # memory.shape[0] = mem_length * seq_len
         
         # x.shape       : seq_len, batch_size, d
         # p.shape       : (mem_length + 1) * seq_len, batch_size, d
         # mask.shape    : seq_len, (mem_length + 1) * seq_len ???
         # memory.shape  : mem_length * seq_len, batch_size, d
-
+        # u_bias        : heads, k
+        # v_bias        : heads, k
 
         q = self.wq(x)  # seq_len, batch_size, heads * k
         # x_mem = torch.cat([memory, x.unsqueeze(0)], dim=0) if memory is not None else x.unsqueeze(0)  # mem_len + 1, seq, batch, emb
-        x_mem = torch.cat([memory, x], dim=0) if memory is not None else x  # mem_len + 1, seq, batch, emb
-        k_e = self.wke(x_mem)  # mem_len + 1, seq, batch, heads * k
-        k_r = self.wkr(p)  # (mem_len + 1) * seq, batch, heads * k
+        x_mem = torch.cat([memory, x], dim=0) if memory is not None else x  # (mem_length + 1) * seq, batch_size, d
+        k_e = self.wke(x_mem)  # (mem_length + 1) * seq, batch, heads * k
+        k_r = self.wkr(p)  # (mem_length + 1) * seq, batch, heads * k
 
-        v = self.wv(x_mem)  # mem_len + 1, seq, batch, heads * k
-        q = torch.reshape(q, (seq_len, batch_size, self.heads, self.k))
-        q_bias_u = q + u_bias
-        q_bias_v = q + v_bias
-        k_e = torch.reshape(k_e, ((mem_len + 1) * seq_len, batch_size, self.heads * self.k))
-        k_r = torch.reshape(k_r, ((mem_len + 1) * seq_len, batch_size, self.heads * self.k))
-        v = torch.reshape(v, ((mem_len + 1) * seq_len, batch_size, self.heads * self.k))
-        k_e = torch.reshape(k_e, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
-        k_r = torch.reshape(k_r, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
-        v = torch.reshape(v, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k))
+        v = self.wv(x_mem)  # (mem_length + 1) * seq, batch_size, heads * k
+        q = torch.reshape(q, (seq_len, batch_size, self.heads, self.k)) # seq_len, batch_size, heads, k
+        q_bias_u = q + u_bias # Assume correct broadcasting, (seq_len, batch_size, heads, k)
+        q_bias_v = q + v_bias # Assume correct broadcasting, (seq_len, batch_size, heads, k)
+        k_e = torch.reshape(k_e, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k)) # (mem_length + 1) * seq, batch, heads, k
+        k_r = torch.reshape(k_r, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k)) # (mem_length + 1) * seq, batch, heads, k
+        v = torch.reshape(v, ((mem_len + 1) * seq_len, batch_size, self.heads, self.k)) # (mem_length + 1) * seq, batch_size, heads, k
         q_bias_u = torch.transpose(q_bias_u, 0, 2)  # self.heads, batch_size, seq_len, self.k
         q_bias_v = torch.transpose(q_bias_v, 0, 2)  # self.heads, batch_size, seq_len, self.k
         k_e = torch.transpose(k_e, 0, 2)  # self.heads, batch_size, (mem_len + 1) * seq_len, self.k
         k_r = torch.transpose(k_r, 0, 2)  # self.heads, batch_size, (mem_len + 1) * seq_len, self.k
         v = torch.transpose(v, 0, 2)  # self.heads, batch_size, (mem_len + 1) * seq_len, self.k
-        q_bias_u = torch.reshape(q_bias_u, (self.heads * batch_size, seq_len, self.k))
-        q_bias_v = torch.reshape(q_bias_v, (self.heads * batch_size, seq_len, self.k))
-        k_e = torch.reshape(k_e, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k))
-        k_r = torch.reshape(k_r, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k))
-        v = torch.reshape(v, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k))
+        q_bias_u = torch.reshape(q_bias_u, (self.heads * batch_size, seq_len, self.k)) # self.heads * batch_size, seq_len, self.k
+        q_bias_v = torch.reshape(q_bias_v, (self.heads * batch_size, seq_len, self.k)) # self.heads * batch_size, seq_len, self.k
+        k_e = torch.reshape(k_e, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k)) # self.heads * batch_size, (mem_len + 1) * seq_len, self.k
+        k_r = torch.reshape(k_r, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k)) # self.heads * batch_size, (mem_len + 1) * seq_len, self.k
+        v = torch.reshape(v, (self.heads * batch_size, (mem_len + 1) * seq_len, self.k)) # self.heads * batch_size, (mem_len + 1) * seq_len, self.k
 
         # self.heads * batch_size, seq_len, (mem_len + 1) * seq_len
-        AC = torch.bmm(q_bias_u, torch.transpose(k_e, 1, 2))
-        BD = torch.bmm(q_bias_v, torch.transpose(k_r, 1, 2))
+        AC = torch.bmm(q_bias_u, torch.transpose(k_e, 1, 2)) # k_e.T(1,2) -> # self.heads * batch_size, self.k, (mem_len + 1) * seq_len
+        BD = torch.bmm(q_bias_v, torch.transpose(k_r, 1, 2)) 
         # if AC.shape[2] > BD.shape[2]:
         #     BD = torch.cat([torch.zeros(AC.shape[0], AC.shape[1], AC.shape[2] - BD.shape[2]).cuda(), BD], dim=2)
 
         # print(AC.shape, BD.shape)
         alpha = AC + BD
-        alpha = alpha / math.sqrt(self.k) + mask
+        alpha = alpha / math.sqrt(self.k) + mask # Assume correct masking
         s = nn.Softmax(dim=-1)
         alpha = s(alpha)  # self.heads * batch_size, seq_len, seq_len * (mem_len + 1) applied softmax
         alpha = self.dropoutatt(alpha)
@@ -163,7 +162,10 @@ class Transformer(nn.Module):
             old_x_shape = x.shape[1]
             x = torch.cat([x, torch.zeros((x.shape[0], 32 - x.shape[1]), dtype=torch.long).cuda()], dim=1)
 
-        mem_len = len(self.memories[0]) if self.memories[0] is not None else 0
+        # len(self.memories[0]) = mem_length * seq_len
+        # x.shape[0] = seq_len
+        # print(f"x.shape: {x.shape}")
+        mem_len = (len(self.memories[0]) // x.shape[0]) if self.memories[0] is not None else 0
         if self.mask is None or self.mask.shape[0] != x.shape[0] or mem_len <= self.max_mem_length:
             self.mask = torch.triu(torch.ones(len(x) * (mem_len + 1), len(x)))
             self.mask.masked_fill_(self.mask == 0, float('-inf')).masked_fill_(self.mask == 1, float(0.0))
@@ -196,7 +198,7 @@ class Transformer(nn.Module):
             self.memories[i] = torch.cat([self.memories[i], hids[i].detach()], dim=0) if self.memories[i] is not None \
                                                                                     else hids[i].detach()
 
-            self.memories[i] = self.memories[i][-self.max_mem_length:]
+            self.memories[i] = self.memories[i][-(self.max_mem_length * x.shape[0]):] # x.shape[0] = seq_len
 
         outputs = torch.matmul(x, self.word_embedding.weight.t()) if self.tied_weights else self.decoder(x)
         outputs = F.log_softmax(outputs + self.bias, dim=-1)
