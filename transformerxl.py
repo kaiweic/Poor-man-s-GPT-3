@@ -41,6 +41,8 @@ class TransformerBlock(nn.Module):
     # p = positional embedding, R_{i-j} in paper
     def forward(self, x, p, mask, memory, u_bias, v_bias):
         seq_len, batch_size, embed_dim = x.shape
+        # mem_len is number of sequences we are keeping, not number of tokens
+        # mem_len = mem_length
         mem_len = (memory.shape[0] // seq_len) if memory is not None else 0
 
         # d = embed_dim
@@ -158,6 +160,7 @@ class Transformer(nn.Module):
     def forward(self, x):
         padded = False
         if x.shape[1] != 32:
+            print("WAWAWEEWAA")
             padded = True
             old_x_shape = x.shape[1]
             x = torch.cat([x, torch.zeros((x.shape[0], 32 - x.shape[1]), dtype=torch.long).cuda()], dim=1)
@@ -165,12 +168,38 @@ class Transformer(nn.Module):
         # len(self.memories[0]) = mem_length * seq_len
         # x.shape[0] = seq_len
         # print(f"x.shape: {x.shape}")
+
+        # Reasoning for mask
+        # 
+        # jamboard: https://jamboard.google.com/d/1RyUptMpOmAfGurvIF-vXo-K2K-8TeWiOs4jIPitfxWY/viewer?f=6
+        #
+        # mask should ultimately be seq_len, (mem_len + 1) * seq_len
+        # we want mask to cover top right so that memory is not masked at all, only current sequence
+
         mem_len = (len(self.memories[0]) // x.shape[0]) if self.memories[0] is not None else 0
         if self.mask is None or self.mask.shape[0] != x.shape[0] or mem_len <= self.max_mem_length:
-            self.mask = torch.triu(torch.ones(len(x) * (mem_len + 1), len(x)))
+            # # transformerxl
+            # self.mask = torch.triu(torch.ones(len(x) * (mem_len + 1), len(x)))
+            # self.mask.masked_fill_(self.mask == 0, float('-inf')).masked_fill_(self.mask == 1, float(0.0))
+            # self.mask = self.mask.transpose(0,1).to(x.device)
+            # self.pos = torch.arange((mem_len + 1) *  x.shape[0] - 1, -1, -1, dtype=torch.long).to(x.device)
+
+            # # transformer
+            # self.mask = torch.triu(torch.ones(len(x), len(x)))
+            # self.mask.masked_fill_(self.mask == 0, float('-inf')).masked_fill_(self.mask == 1, float(0.0))
+            # self.mask = self.mask.transpose(0,1).to(x.device)
+            # self.pos = torch.arange(0, x.shape[0], dtype=torch.long).to(x.device)
+
+            # new transformerxl
+            self.mask = torch.triu(torch.ones(len(x), len(x)))
             self.mask.masked_fill_(self.mask == 0, float('-inf')).masked_fill_(self.mask == 1, float(0.0))
-            self.mask = self.mask.transpose(0,1).to(x.device)
+            self.mask = self.mask.transpose(0,1).to(x.device) # now mask is seq_len, seq_len
+            # TODO: concatenate seq_len, (mem_len * seq_len) of 0.0 to the left of mask
+            self.mask = torch.cat([torch.zeros(len(x), len(x) * mem_len).to(x.device), self.mask], dim=1) # now mask is seq_len, (mem_len + 1) * seq_len
+            # print("Mem_len, Mask shape: ", mem_len, self.mask.shape)
+            # print("Mask sums: ", torch.sum(self.mask==0, dim=0), torch.sum(self.mask==0, dim=1))
             self.pos = torch.arange((mem_len + 1) *  x.shape[0] - 1, -1, -1, dtype=torch.long).to(x.device)
+
 
         x = self.dropi(self.word_embedding(x) * math.sqrt(self.dims))
         p = self.dropi(self.positional_embedding(self.pos, x.shape[1]))
