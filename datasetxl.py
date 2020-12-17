@@ -21,32 +21,35 @@ class WikiText2(torch.utils.data.Dataset):
         self._tokenize(os.path.join(root, 'train.txt')) # TODO: do we need this call?
         self.raw = self._tokenize(os.path.join(root, split.name + '.txt'))
 
-        # so now, self.raw is a tokenized version of the .txt file.
-        # now, we need to make sure to return batches in the style of dataloader.py
-        # which basically means we want consecutive batches to contain consecutive sequences
-        # as opposed to a batch containing consecutive sequences
-        if len(self.raw) % batch_size != 0:
-            self.raw = self.raw[0:-(len(self.raw) % batch_size)]
+        # trim
+        seq_len = context
+        num_tokens_in_batch = seq_len * batch_size # number of tokens in batch
+
+        if len(self.raw) % num_tokens_in_batch != 0:
+            self.raw = self.raw[:-(len(self.raw) % num_tokens_in_batch)]
+
+        # le hack: y should be 1 token shifted over from x, so voila!
+        # print(self.raw[-1])
+        # print(self.raw.shape)
+        self.raw = torch.cat([self.raw, self.raw[-1].unsqueeze(0)])
+        # print(self.raw.shape)
 
         dataset = []
-        index = 0
-        batch_length = len(self.raw) // batch_size
-        seq_count = 0
-        for batch in range(0, batch_length // context + 1):
+        num_batches = len(self.raw) // num_tokens_in_batch
+        for batch in range(num_batches):
             dataset.append([[], []])
-            data = dataset[-1][0]
-            label = dataset[-1][1]
-            for sequence in range(context):
-                for batch_index in range(batch_size):
-                    if sequence % context == 0:
-                        seq_count += 1
-                        data.append([])
-                        label.append([])
-                    if batch * context + sequence < batch_length - 1:
-                        data[batch_index].append(self.raw[batch * context + batch_index * batch_length + sequence])
-                        label[batch_index].append(self.raw[batch * context + batch_index * batch_length + sequence + 1])
+            x = dataset[-1][0]
+            y = dataset[-1][1]
+            for batch_index in range(batch_size):
+                start = batch * seq_len + batch_index * num_tokens_in_batch
+                end = start + seq_len
+                x.append(self.raw[start:end])
+                y.append(self.raw[start+1:end+1])
+                assert(len(x[-1]) == seq_len)
+                assert(len(y[-1]) == seq_len)
+
         self.dataset = dataset
-        self.seq_count = seq_count
+        self.seq_count = num_batches * batch_size
 
 
     def __len__(self):
