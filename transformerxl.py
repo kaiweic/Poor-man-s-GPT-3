@@ -42,11 +42,19 @@ class TransformerBlock(nn.Module):
         seq_len, batch_size, embed_dim = x.shape
         mem_len = memory.shape[0] if memory is not None else 0
 
-        # Hint: Writing efficient code is almost as important as writing correct code in ML.
-        #       Avoid writing for-loops! Consider using the batch matrix multiplication operator torch.bmm
+        # d = embed_dim
+        # k = head_dim
+        # mem_len = m * seq_len
+        
+        # x.shape       : seq_len, batch_size, d
+        # p.shape       : (mem_length + 1) * seq_len, batch_size, d
+        # mask.shape    : seq_len, (mem_length + 1) * seq_len ???
+        # memory.shape  : mem_length * seq_len, batch_size, d
+
 
         q = self.wq(x)  # seq_len, batch_size, heads * k
-        x_mem = torch.cat([memory, x.unsqueeze(0)], dim=0) if memory is not None else x.unsqueeze(0)  # mem_len + 1, seq, batch, emb
+        # x_mem = torch.cat([memory, x.unsqueeze(0)], dim=0) if memory is not None else x.unsqueeze(0)  # mem_len + 1, seq, batch, emb
+        x_mem = torch.cat([memory, x], dim=0) if memory is not None else x  # mem_len + 1, seq, batch, emb
         k_e = self.wke(x_mem)  # mem_len + 1, seq, batch, heads * k
         k_r = self.wkr(p)  # (mem_len + 1) * seq, batch, heads * k
 
@@ -183,8 +191,11 @@ class Transformer(nn.Module):
         # if this is not the last batch (size = 10)
         # if x.shape[1] == 32:
         for i in range(self.layers):
-            self.memories[i] = torch.cat([self.memories[i], hids[i].detach().unsqueeze(0)], dim=0) if self.memories[i] is not None \
-                                                                                    else hids[i].detach().unsqueeze(0)
+            # self.memories[i] = torch.cat([self.memories[i], hids[i].detach().unsqueeze(0)], dim=0) if self.memories[i] is not None \
+            #                                                                         else hids[i].detach().unsqueeze(0)
+            self.memories[i] = torch.cat([self.memories[i], hids[i].detach()], dim=0) if self.memories[i] is not None \
+                                                                                    else hids[i].detach()
+
             self.memories[i] = self.memories[i][-self.max_mem_length:]
 
         outputs = torch.matmul(x, self.word_embedding.weight.t()) if self.tied_weights else self.decoder(x)
