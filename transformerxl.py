@@ -139,6 +139,7 @@ class Transformer(nn.Module):
         self.positional_embedding = PositionalEmbedding(d)
         self.dropi = nn.Dropout(dropoutio)
         self.word_embedding = nn.Embedding(tokens, d)
+        # self.drope = nn.Dropout(dropoutio)
         self.transformer = nn.ModuleList()
         for i in range(self.layers):
             self.transformer.append(TransformerBlock(heads, d, k, m, dropout))
@@ -160,14 +161,9 @@ class Transformer(nn.Module):
     def forward(self, x):
         padded = False
         if x.shape[1] != 32:
-            # print("WAWAWEEWAA")
             padded = True
             old_x_shape = x.shape[1]
             x = torch.cat([x, torch.zeros((x.shape[0], 32 - x.shape[1]), dtype=torch.long).cuda()], dim=1)
-
-        # len(self.memories[0]) = mem_length * seq_len
-        # x.shape[0] = seq_len
-        # print(f"x.shape: {x.shape}")
 
         # Reasoning for mask
         # 
@@ -194,10 +190,7 @@ class Transformer(nn.Module):
             self.mask = torch.triu(torch.ones(len(x), len(x)))
             self.mask.masked_fill_(self.mask == 0, float('-inf')).masked_fill_(self.mask == 1, float(0.0))
             self.mask = self.mask.transpose(0,1).to(x.device) # now mask is seq_len, seq_len
-            # TODO: concatenate seq_len, (mem_len * seq_len) of 0.0 to the left of mask
             self.mask = torch.cat([torch.zeros(len(x), len(x) * mem_len).to(x.device), self.mask], dim=1) # now mask is seq_len, (mem_len + 1) * seq_len
-            # print("Mem_len, Mask shape: ", mem_len, self.mask.shape)
-            # print("Mask sums: ", torch.sum(self.mask==0, dim=0), torch.sum(self.mask==0, dim=1))
             self.pos = torch.arange((mem_len + 1) *  x.shape[0] - 1, -1, -1, dtype=torch.long).to(x.device)
 
 
@@ -206,8 +199,11 @@ class Transformer(nn.Module):
         # z = F.relu(x + p)
 
         hids = [x]  #layers, seq, batch, emb
-        # add memory for transformer xl
-        # if x.shape[1] == 32:
+
+        # input embedding dropout
+        # w = self.drope(torch.ones(x.shape[0]).to(x.device)[:,None,None])
+        # x = torch.where(w > 0, x, torch.zeros(x.shape).to(x.device))
+
         for i in range(self.layers):
             x = self.transformer[i](x, p, self.mask, self.memories[i], self.u, self.v)  #seq, batch, emb
             hids.append(x)
@@ -217,13 +213,8 @@ class Transformer(nn.Module):
         #         hids.append(z)
 
         x = self.dropo(x)
-        # print(x.shape)
 
-        # if this is not the last batch (size = 10)
-        # if x.shape[1] == 32:
         for i in range(self.layers):
-            # self.memories[i] = torch.cat([self.memories[i], hids[i].detach().unsqueeze(0)], dim=0) if self.memories[i] is not None \
-            #                                                                         else hids[i].detach().unsqueeze(0)
             self.memories[i] = torch.cat([self.memories[i], hids[i].detach()], dim=0) if self.memories[i] is not None \
                                                                                     else hids[i].detach()
 

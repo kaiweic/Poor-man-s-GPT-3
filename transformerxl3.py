@@ -114,8 +114,8 @@ class Transformer(nn.Module):
         # input embedding dropout
         # z.shape: seq_len, batch_size, dims
         # let's do dropout over dim=0, meaning that we drop words across all batches
-        w = self.drope(torch.ones(seq_len, dtype=torch.long).to(x.device)[:,None,None])
-        z = torch.where(w > 0, z, 0)
+        w = self.drope(torch.ones(self.seq_len).to(x.device)[:,None,None])
+        z = torch.where(w > 0, z, torch.zeros(z.shape).to(x.device))
 
         for layer in self.transformer:
             z = layer(z, self.mask)
