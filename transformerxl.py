@@ -158,12 +158,12 @@ class Transformer(nn.Module):
         self.v = nn.Parameter(torch.Tensor(heads, k))
 
     def forward(self, x):
-        padded = False
-        if x.shape[1] != 32:
-            print("WAWAWEEWAA")
-            padded = True
-            old_x_shape = x.shape[1]
-            x = torch.cat([x, torch.zeros((x.shape[0], 32 - x.shape[1]), dtype=torch.long).cuda()], dim=1)
+        # padded = False
+        # if x.shape[1] != 32:
+        #     # print("WAWAWEEWAA")
+        #     padded = True
+        #     old_x_shape = x.shape[1]
+        #     x = torch.cat([x, torch.zeros((x.shape[0], 32 - x.shape[1]), dtype=torch.long).cuda()], dim=1)
 
         # len(self.memories[0]) = mem_length * seq_len
         # x.shape[0] = seq_len
@@ -231,8 +231,8 @@ class Transformer(nn.Module):
 
         outputs = torch.matmul(x, self.word_embedding.weight.t()) if self.tied_weights else self.decoder(x)
         outputs = F.log_softmax(outputs + self.bias, dim=-1)
-        if padded:
-            outputs = outputs[:, :old_x_shape, :]
+        # if padded:
+        #     outputs = outputs[:, :old_x_shape, :]
         return outputs
 
     def reset_memory(self):
