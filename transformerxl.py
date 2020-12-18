@@ -130,6 +130,7 @@ class Transformer(nn.Module):
         super(Transformer, self).__init__()
         self.mask = None
         self.pos = None
+        self.seq_len = seq_len
         self.dims = d
         self.tied_weights = tied_weights
         self.dropout=dropout
@@ -139,7 +140,7 @@ class Transformer(nn.Module):
         self.positional_embedding = PositionalEmbedding(d)
         self.dropi = nn.Dropout(dropoutio)
         self.word_embedding = nn.Embedding(tokens, d)
-        # self.drope = nn.Dropout(dropoutio)
+        self.drope = nn.Dropout(dropoutio)
         self.transformer = nn.ModuleList()
         for i in range(self.layers):
             self.transformer.append(TransformerBlock(heads, d, k, m, dropout))
@@ -148,15 +149,19 @@ class Transformer(nn.Module):
         self.dropo = nn.Dropout(dropoutio)
         self.bias = nn.Parameter(torch.ones(tokens))
 
+        self.memories = [None] * self.layers  #layers, mem_len, seq, batch, emb
+
+        self.u = nn.Parameter(torch.Tensor(heads, k))
+        self.v = nn.Parameter(torch.Tensor(heads, k))
+
         # nn.init.normal_(self.positional_embedding.weight, 0, .02)
         nn.init.normal_(self.word_embedding.weight, 0, .02)
         if not self.tied_weights: nn.init.normal_(self.decoder.weight, 0, .02)
         nn.init.constant_(self.bias, 0.0)
 
-        self.memories = [None] * self.layers  #layers, mem_len, seq, batch, emb
+        nn.init.normal_(self.u.weight, 0, .02)
+        nn.init.normal_(self.v.weight, 0, .02)
 
-        self.u = nn.Parameter(torch.Tensor(heads, k))
-        self.v = nn.Parameter(torch.Tensor(heads, k))
 
     def forward(self, x):
         padded = False
@@ -201,7 +206,7 @@ class Transformer(nn.Module):
         hids = [x]  #layers, seq, batch, emb
 
         # input embedding dropout
-        # w = self.drope(torch.ones(x.shape[0]).to(x.device)[:,None,None])
+        # w = self.drope(torch.ones(self.seq_len).to(x.device)[:,None,None])
         # x = torch.where(w > 0, x, torch.zeros(x.shape).to(x.device))
 
         for i in range(self.layers):
