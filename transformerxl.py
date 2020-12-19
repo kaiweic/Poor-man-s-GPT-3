@@ -159,8 +159,8 @@ class Transformer(nn.Module):
         if not self.tied_weights: nn.init.normal_(self.decoder.weight, 0, .02)
         nn.init.constant_(self.bias, 0.0)
 
-        nn.init.normal_(self.u.weight, 0, .02)
-        nn.init.normal_(self.v.weight, 0, .02)
+        nn.init.normal_(self.u, 0, .02)
+        nn.init.normal_(self.v, 0, .02)
 
 
     def forward(self, x):
@@ -206,8 +206,8 @@ class Transformer(nn.Module):
         hids = [x]  #layers, seq, batch, emb
 
         # input embedding dropout
-        # w = self.drope(torch.ones(self.seq_len).to(x.device)[:,None,None])
-        # x = torch.where(w > 0, x, torch.zeros(x.shape).to(x.device))
+        w = self.drope(torch.ones(self.seq_len).to(x.device)[:,None,None])
+        x = torch.where(w > 0, x, torch.zeros(x.shape).to(x.device))
 
         for i in range(self.layers):
             x = self.transformer[i](x, p, self.mask, self.memories[i], self.u, self.v)  #seq, batch, emb
